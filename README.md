@@ -56,7 +56,7 @@ async function chat(userMessage) {
 }
 ```
 
-> ⚠️ 我（Opus）要求前缀 ≥ **4096 tokens** 才会缓存。Sonnet/Haiku 是 2048。system prompt 太短的话缓存不生效。
+> ⚠️ 最小缓存量因模型而异：Opus 4.8 需 1024、Opus 4.7 需 2048、Opus 4.6/4.5 需 **4096**、Sonnet 4.6/4.5 需 1024、Haiku 4.5 需 **4096** tokens。前缀不够长的话缓存不生效。
 
 ---
 
@@ -95,7 +95,7 @@ async function chat(userMessage) {
 
 - 最多 **4 个**断点，超了 400
 - **5 分钟** TTL，没人读就过期
-- 前缀最少 **4096 tokens**（Opus）/ 2048（Sonnet、Haiku）
+- 前缀最少 **4096 tokens**（Opus 4.6、Haiku 4.5）/ 2048（Opus 4.7）/ 1024（Opus 4.8、Sonnet）
 
 ## 3. 断点打哪
 
