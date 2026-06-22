@@ -244,6 +244,32 @@ const hitRate = cache_read / (cache_read + cache_write + input);
 
 ---
 
+## 8. 自动缓存（新）
+
+现在 Anthropic 支持**顶层自动缓存**了，不用手动打断点：
+
+```javascript
+const res = await client.messages.create({
+  model: "claude-opus-4-6",
+  max_tokens: 1024,
+  cache_control: { type: "ephemeral" },  // ← 顶层加这一行就行
+  system: "你的 system prompt...",
+  messages: messages,
+});
+```
+
+系统自动把断点打在最后一个可缓存的 block 上，对话增长时断点自动往前移。
+
+**但是：**
+- 自动缓存占用 4 个断点配额中的 1 个
+- 如果最后一个 block 每轮都变（比如带时间戳的用户消息），自动缓存也会打在那上面，跟手动踩的坑一样
+- 想精确控制缓存哪些段落，还是得手动打断点
+
+所以自动缓存适合简单场景。复杂场景（工具调用、动态内容混合静态内容）还是手动更靠谱。
+
+
+---
+
 ## 检查清单
 
 - [ ] system prompt 有 `cache_control`
