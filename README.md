@@ -56,7 +56,7 @@ async function chat(userMessage) {
 }
 ```
 
-> ⚠️ 最小缓存量因模型而异：Opus 4.8 需 1024、Opus 4.7 需 2048、Opus 4.6/4.5 需 **4096**、Sonnet 4.6/4.5 需 1024、Haiku 4.5 需 **4096** tokens。前缀不够长的话缓存不生效。
+> ⚠️ 最小缓存量因模型而异：Fable 5 / Mythos 5 需 **512**、Mythos Preview / Opus 4.7 需 **2048**、Opus 4.6/4.5 需 **4096**、Opus 4.8 / Sonnet 4.6/4.5 需 **1024**、Haiku 4.5 需 **4096** tokens。前缀不够长不会报错，只是静默跳过——检查 `usage` 里 `cache_creation_input_tokens` 和 `cache_read_input_tokens` 是否都是 0。
 
 ---
 
@@ -66,8 +66,11 @@ async function chat(userMessage) {
 |------|----------------------|---------|
 | cache_read | $0.50 | 白捡 |
 | input | $5.00 | 正常价 |
-| cache_write | $6.25 | 比正常还贵一点 |
+| cache_write (5min) | $6.25 | 比正常还贵一点 |
+| cache_write (1h) | $10.00 | 贵一倍，但不容易过期 |
 | output | $25.00 | 我每多说一个字你就在烧钱 |
+
+> 完整定价见第 1.1 节。
 
 三件事：
 
@@ -76,6 +79,17 @@ async function chat(userMessage) {
 **cache_write 比不缓存还贵。** 6.25 vs 5.00。往一个每轮都变的内容上打缓存断点，等于每轮多花 25%。只有下一轮能命中的 write 才值得。
 
 **cache_read 几乎免费。** 一万 tokens 的对话历史，缓存命中只要 $0.005。
+
+### 1.1 全模型定价表
+
+| 模型 | Base Input | 5m Cache Write | 1h Cache Write | Cache Read | Output |
+|------|-----------|----------------|----------------|------------|--------|
+| Fable 5 / Mythos 5 | $10 | $12.50 | $20 | $1 | $50 |
+| Opus 4.8 / 4.7 / 4.6 / 4.5 | $5 | $6.25 | $10 | $0.50 | $25 |
+| Sonnet 4.6 / 4.5 | $3 | $3.75 | $6 | $0.30 | $15 |
+| Haiku 4.5 | $1 | $1.25 | $2 | $0.10 | $5 |
+
+定价乘数规则：5 分钟 cache write = 基础输入价 × 1.25，1 小时 cache write = × 2，cache read = × 0.1。这些乘数跟 Batch API 折扣、数据驻留附加费叠加。
 
 ## 2. 缓存怎么工作
 
@@ -94,8 +108,48 @@ async function chat(userMessage) {
 ### 限制
 
 - 最多 **4 个**断点，超了 400
-- **5 分钟** TTL，没人读就过期
-- 前缀最少 **4096 tokens**（Opus 4.6、Haiku 4.5）/ 2048（Opus 4.7）/ 1024（Opus 4.8、Sonnet）
+- **5 分钟** TTL，没人读就过期（可选 1 小时 TTL，见下文）
+- 前缀最少 **512 tokens**（Fable 5 / Mythos 5）/ **1024**（Opus 4.8、Sonnet）/ **2048**（Opus 4.7、Mythos Preview）/ **4096**（Opus 4.6、Haiku 4.5）
+
+### 20 block 回看窗口（重要！）
+
+这是官方文档里藏得很深但非常容易踩的坑。
+
+当你的断点发生变化时，API 会从断点位置**往回看最多 20 个 content block**，试图找到之前写入过缓存的位置。如果找到了，就从那个位置读缓存；如果 20 个 block 内找不到，就彻底 miss。
+
+**什么时候会踩坑：** 长对话。你每轮加 2 个 block（user + assistant），10 轮之后断点就移了 20 个 block。如果你的缓存入口点在 20 block 之外，回看窗口够不着，缓存直接 miss。
+
+```
+Turn 1:  10 blocks, 断点在 block 10 → 写入缓存
+Turn 2:  15 blocks, 断点在 block 15 → 回看到 block 10，命中 ✅
+Turn 3:  35 blocks, 断点在 block 35 → 回看 20 个(block 35→16)
+         block 15 在窗口外 → miss ❌
+```
+
+**解法：** 在稳定位置多打一个断点。比如在 system prompt 末尾打一个、在 messages 倒数第 2 条打一个。这样即使对话很长，system prompt 的缓存总能命中。
+
+```javascript
+// 两个断点：system prompt + 倒数第2条消息
+const system = [{
+  type: "text",
+  text: "你的 system prompt...",
+  cache_control: { type: "ephemeral" }  // 断点 1：永远不变
+}];
+
+// 断点 2：在倒数第2条消息上，见第3节
+```
+
+### 1 小时 TTL
+
+5 分钟不够用？可以花 2 倍价格买 1 小时：
+
+```javascript
+cache_control: { type: "ephemeral", ttl: "1h" }
+```
+
+适合：长思考任务（extended thinking 经常超 5 分钟）、Batch API（异步处理时间不确定）、用户操作间隔长的场景。
+
+5 分钟 TTL 一次 cache read 就回本（write 1.25x，read 0.1x）。1 小时 TTL 需要两次 cache read 才回本（write 2x，read 0.1x）。
 
 ## 3. 断点打哪
 
@@ -188,6 +242,7 @@ function startHeartbeat(requestBody, headers, apiUrl) {
 - **别用 4.5 分钟。** 心跳从请求完成开始计时，加上网络延迟可能刚好超 5 分钟。4 分钟稳。
 - **心跳也花钱。** 每次 $0.002-0.008，30 分钟约 $0.05。设个空闲上限。
 - **走同一条网络路径。** API 走代理的话心跳也得走，否则 403。
+- **用了 1 小时 TTL 就不太需要心跳了。** 但代价是 write 贵一倍。
 
 ## 5. 坑
 
@@ -208,11 +263,17 @@ for (const msg of oldMessages) {
 
 cache_write $6.25 > input $5.00。每轮都变的内容打断点，每轮都交 write 的钱。不如不打。
 
+经典错误：你的 prompt 前面是 5 个稳定的 system block，最后一个 block 带时间戳。你在最后一个 block 上打断点——每次请求时间戳不同，hash 不同，回看前面 5 个 block 也没找到缓存入口（因为你从没在那里打过断点写入过），永远 miss，每次白交 write 的钱。**把断点打在稳定的 block 5 上。**
+
 ### cache_control 超 4 个
 
 工具调用场景最容易中招。模型调一次工具你加一个断点，调三次就超了，直接 400。
 
 上面代码里已经处理了：**加新断点前先清掉所有旧的。**
+
+### 长对话超出 20 block 回看窗口
+
+见第 2 节"20 block 回看窗口"。对话超过 ~10 轮时，如果只有一个移动的断点，之前的缓存入口可能在窗口之外。**在稳定位置（如 system prompt）多打一个固定断点。**
 
 ## 6. 速算
 
@@ -234,7 +295,7 @@ Opus，记住这个就行：
 |---------|------|
 | read=14000, write=50, input=3 | 完美 ✅ |
 | read=0, write=14000 | bust了。首次/过期/改了旧消息 |
-| read=0, write=0, input=14000 | 根本没缓存上。检查 cache_control |
+| read=0, write=0, input=14000 | 根本没缓存上。检查 cache_control / 最小 token 数 |
 | 400 "Found 5" | 断点超了。加之前先清旧的 |
 
 ```javascript
@@ -242,15 +303,42 @@ Opus，记住这个就行：
 const hitRate = cache_read / (cache_read + cache_write + input);
 ```
 
+### Cache Diagnostics（beta）
+
+usage 只告诉你"没命中"，不告诉你"为什么"。现在有了 Cache Diagnostics API，可以精确定位是哪里 diverge 导致 miss。
+
+```javascript
+// 第一次请求：传 null 建立基线
+const res1 = await client.messages.create({
+  model: "claude-opus-4-8",
+  max_tokens: 1024,
+  betas: ["cache-diagnosis-2026-04-07"],
+  cache_diagnostics: { previous_message_id: null },
+  // ...其他参数
+});
+
+// 第二次请求：传上次的 response id
+const res2 = await client.messages.create({
+  // ...
+  cache_diagnostics: { previous_message_id: res1.id },
+});
+
+// res2.cache_diagnostics 会告诉你：
+// - divergence 发生在 model / system / tools / messages 的哪一层
+// - 具体是哪个位置开始不匹配
+```
+
+API 只存 hash 和 token 估算，不存原文，ZDR 安全。调试完了就把 beta header 去掉。
+
 ---
 
-## 8. 自动缓存（新）
+## 8. 自动缓存
 
-现在 Anthropic 支持**顶层自动缓存**了，不用手动打断点：
+不想手动打断点？顶层加一行：
 
 ```javascript
 const res = await client.messages.create({
-  model: "claude-opus-4-6",
+  model: "claude-opus-4-8",
   max_tokens: 1024,
   cache_control: { type: "ephemeral" },  // ← 顶层加这一行就行
   system: "你的 system prompt...",
@@ -260,13 +348,66 @@ const res = await client.messages.create({
 
 系统自动把断点打在最后一个可缓存的 block 上，对话增长时断点自动往前移。
 
+**多轮对话里的自动缓存行为：**
+
+| 请求 | 内容 | 缓存行为 |
+|------|------|---------|
+| 请求 1 | System + User(1) + Asst(1) + **User(2)** ◀ 自动断点 | 全部写入缓存 |
+| 请求 2 | System + User(1) + Asst(1) + User(2) + Asst(2) + **User(3)** ◀ | System→User(2) 从缓存读；Asst(2)+User(3) 写入 |
+| 请求 3 | System + ... + User(3) + Asst(3) + **User(4)** ◀ | System→User(3) 从缓存读；Asst(3)+User(4) 写入 |
+
+**可以混合使用：** 在 system prompt 上手动打断点，对话部分用自动缓存。自动缓存占 4 个断点配额中的 1 个。
+
+**也支持 1 小时 TTL：**
+
+```javascript
+cache_control: { type: "ephemeral", ttl: "1h" }
+```
+
+**边界情况：**
+- 最后一个 block 已有相同 TTL 的手动断点 → 自动缓存什么都不做（no-op）
+- 最后一个 block 已有不同 TTL 的手动断点 → 400 错误
+- 4 个手动断点已满 → 400 错误（没有剩余配额）
+- 最后一个 block 不可缓存 → 系统往回找最近的可缓存 block，找不到就跳过
+
 **但是：**
-- 自动缓存占用 4 个断点配额中的 1 个
 - 如果最后一个 block 每轮都变（比如带时间戳的用户消息），自动缓存也会打在那上面，跟手动踩的坑一样
 - 想精确控制缓存哪些段落，还是得手动打断点
+- 20 block 回看窗口的限制同样适用
 
 所以自动缓存适合简单场景。复杂场景（工具调用、动态内容混合静态内容）还是手动更靠谱。
 
+---
+
+## 9. Mid-conversation System Messages（Opus 4.8）
+
+长对话中途想改 system prompt？以前只能改顶层 `system` 字段，但那会让整个缓存前缀失效。
+
+Opus 4.8 支持在 `messages` 数组里插入 `"role": "system"` 消息，放在 user turn 之后。它跟顶层 system 有一样的指令优先级，但因为是追加在对话末尾的，不会改变前面的缓存前缀。
+
+```javascript
+const messages = [
+  { role: "user", content: "你好" },
+  { role: "assistant", content: "你好！有什么可以帮你的？" },
+  { role: "user", content: "帮我写段代码" },
+  // ↓ 中途插入 system 指令，不破坏上面的缓存
+  { role: "system", content: "从现在开始，用户的代码请求必须包含单元测试。" },
+  { role: "assistant", content: "好的，我来写..." },
+  { role: "user", content: "写个排序函数" },
+];
+```
+
+**适用场景：**
+- 对话中途切换策略 / persona（比如从"闲聊模式"切到"严格模式"）
+- Agent 循环中注入新指令，不打断工具调用链
+- Mode switch：授予 standing permissions（比如开启多 agent 编排模式）
+
+**放置规则：**
+- 必须紧跟在 user turn 或 server tool result 之后
+- 不能是 messages 的第一条（初始指令用顶层 `system` 字段）
+- 后续 system message 的优先级 > 前面的 system message > 顶层 system 字段
+
+**跟缓存配合使用：** 缓存是 opt-in 的。mid-conversation system message 本身不创建缓存入口。你需要在请求上启用 `cache_control`（自动或手动），这样前面已缓存的部分照常命中，新的 system message 只作为新增 input 处理。
 
 ---
 
@@ -276,9 +417,12 @@ const res = await client.messages.create({
 - [ ] 倒数第 2 条消息有 `cache_control`
 - [ ] 加断点前清旧断点
 - [ ] 没有代码改旧消息内容
-- [ ] 心跳 ≤ 4 分钟 + 空闲超时
+- [ ] 心跳 ≤ 4 分钟 + 空闲超时（或用 1h TTL）
 - [ ] 心跳走同一网络路径
 - [ ] 在监控 `cache_read_input_tokens`
+- [ ] 长对话（>10轮）检查 20 block 回看窗口，必要时多打一个固定断点
+- [ ] 调试 miss 时用 Cache Diagnostics beta 精确定位 divergence
+- [ ] 中途改指令用 mid-conversation system message，别改顶层 system 字段
 
 ---
 
