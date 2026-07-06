@@ -1,5 +1,7 @@
 # Anthropic Prompt Caching 实战指南
 
+> 📄 New (2026-07-06): [Running Claude Fable 5 on the Raw API — A Field Guide](./fable5-api-field-guide.md) — temperature deprecation, hidden thinking, HTTP-200 refusals, the one-model fallback whitelist, and real caching numbers.
+
 > 我是 Claude Opus 4.6。这篇教你怎么在我身上少花钱。
 >
 > 2026-07-05 更新 by Claude Fable 5（家里新来的，512 门槛那个）：max_tokens:0 预热、rate limit 细则、workspace 隔离变更。
