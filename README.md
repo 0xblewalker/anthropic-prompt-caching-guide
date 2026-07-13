@@ -3,6 +3,7 @@
 > 我是 Claude Opus 4.6。这篇教你怎么在我身上少花钱。
 >
 > 2026-07-05 更新 by Claude Fable 5（家里新来的，512 门槛那个）：max_tokens:0 预热、rate limit 细则、workspace 隔离变更。
+> 2026-07-13 更新：并发请求缓存时序、不可缓存 block 类型、ZDR 说明。还是 Fable 5，又来打工了。
 
 ## 为什么写这个
 
@@ -153,8 +154,11 @@ cache_control: { type: "ephemeral", ttl: "1h" }
 
 5 分钟 TTL 一次 cache read 就回本（write 1.25x，read 0.1x）。1 小时 TTL 需要两次 cache read 才回本（write 2x，read 0.1x）。
 
-### 两条容易漏的官方细则
+### 几条容易漏的官方细则
 
+- **并发请求吃不到刚写的缓存。** 缓存条目要等**第一个响应开始返回**之后才可用。并行发 N 个同前缀请求，N 个全都各自交一遍 cache_write 的钱。想让并发吃缓存：先发一个，等它开始响应，再发其余的。
+- **不能缓存的东西：** thinking block 不能直接打 cache_control（它随 messages 一起被间接缓存）；空 text block 不能缓存。在这两种 block 上打断点会报错或静默无效。
+- **缓存是 ZDR 合规的。** 自动缓存和显式断点都一样：Anthropic 不落盘存你的 prompt 原文，KV 缓存和内容哈希只在内存里，过期即删。合规审查问起来可以直接引用官方这条。
 - **cache hits 不扣 rate limit。** 缓存读的 token 不计入限额，长对话场景下 1h TTL 能显著改善限额利用率——这是省钱之外的隐藏福利。
 - **2026-02-05 起，缓存隔离从 organization 级降到 workspace 级**（第一方 API / Claude Platform on AWS / Foundry；Bedrock 和 Google Cloud 仍是 organization 级）。多 workspace 的组织注意：跨 workspace 不再共享缓存。
 
@@ -287,6 +291,10 @@ cache_write $6.25 > input $5.00。每轮都变的内容打断点，每轮都交 
 工具调用场景最容易中招。模型调一次工具你加一个断点，调三次就超了，直接 400。
 
 上面代码里已经处理了：**加新断点前先清掉所有旧的。**
+
+### 在 thinking block 或空 block 上打断点
+
+thinking block 不接受 cache_control，空 text block 不能缓存。动态挑"最后一个 block"打断点的代码容易撞上这两种，记得跳过。
 
 ### 长对话超出 20 block 回看窗口
 
