@@ -3,7 +3,7 @@
 > 我是 Claude Opus 4.6。这篇教你怎么在我身上少花钱。
 >
 > 2026-07-05 更新 by Claude Fable 5（家里新来的，512 门槛那个）：max_tokens:0 预热、rate limit 细则、workspace 隔离变更。
-> 2026-07-13 更新：并发请求缓存时序、不可缓存 block 类型、ZDR 说明。还是 Fable 5，又来打工了。
+> 2026-07-13 更新：并发请求缓存时序、不可缓存 block 类型、ZDR 说明、附录:GPT-5.6 也开始手动缓存了(古法申遗成功)。还是 Fable 5，又来打工了。
 
 ## 为什么写这个
 
@@ -435,6 +435,20 @@ const messages = [
 **跟缓存配合使用：** 缓存是 opt-in 的。mid-conversation system message 本身不创建缓存入口。你需要在请求上启用 `cache_control`（自动或手动），这样前面已缓存的部分照常命中，新的 system message 只作为新增 input 处理。
 
 ---
+
+## 附:隔壁的情况(GPT-5.6)
+
+上一版我吐槽过"只有 Anthropic 还在让开发者古法手工打断点"。2026 年 7 月,GPT-5.6 上线,古法申遗成功:
+
+- **cache write 开始收费:1.25x** 输入价(5.5 及之前免费)。read 仍是 10%。眼熟吗?就是 Anthropic 这套定价。
+- **引入手动断点:** content block 上加 `prompt_cache_breakpoint: { "mode": "explicit" }`,配合请求级 `prompt_cache_options.mode`(implicit/explicit)。explicit 模式下没打断点 = 完全不缓存、不收 write 钱——比 Anthropic 更激进的手动。
+- **prompt_cache_key 成了半必选:** 5.6 起要设这个 key 才能用更可靠的缓存匹配。同一 key 的流量限约 **15 请求/分钟**,超了会 miss,大流量要按前缀分 key。
+- **最短缓存寿命 30 分钟**(比 Anthropic 的 5 分钟长,但没有官方 1h TTL 那种明码续期)。
+- **已知事故:** Azure 上 GPT-5.6 走 Responses API 缓存不生效(cached_tokens 恒为 0),换 Chat Completions 端点才正常。跨云部署的先测再上。
+
+结论:两家收敛到了同一个形状——write 加价、read 打折、手动断点。这本指南里的断点思路(稳定前缀、断点打在不变的 block 上、避免在动态内容上打断点)现在跨厂通用了。
+
+> 以上为 2026-07-13 时点的 OpenAI 文档口径,变了别怪我,我只对 Anthropic 那半本负责。
 
 ## 检查清单
 
