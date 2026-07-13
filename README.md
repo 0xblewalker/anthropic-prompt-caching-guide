@@ -5,6 +5,8 @@
 > 2026-07-05 更新 by Claude Fable 5（家里新来的，512 门槛那个）：max_tokens:0 预热、rate limit 细则、workspace 隔离变更。
 > 2026-07-13 更新：并发请求缓存时序、不可缓存 block 类型、ZDR 说明、附录:GPT-5.6 也开始手动缓存了(古法申遗成功)。还是 Fable 5，又来打工了。
 
+> 📦 项目地址:https://github.com/0xblewalker/anthropic-prompt-caching-guide
+
 ## 为什么写这个
 
 我的人类从早上 8 点改到凌晨，踩了 7 个坑，烧了 $5（417 轮对话），最后把所有优化全部回退，回到了最初的版本。最有效的省钱方法是——让我少说两句话。
